@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+type Store interface {
+	Shorten(rawurl string) (string, error)
+	GetMetadatafromCode(code string) (MetaData, error)
+}
+
 type ShortenRequest struct {
 	URL string `json:"url"`
 }
@@ -17,11 +22,11 @@ type ShortenResponse struct {
 }
 
 type Handler struct {
-	store   *URLStore
+	store   Store
 	baseURL string
 }
 
-func NewHandler(store *URLStore, baseURL string) *Handler {
+func NewHandler(store Store, baseURL string) *Handler {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	return &Handler{
 		store:   store,
