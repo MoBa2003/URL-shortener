@@ -15,7 +15,7 @@ type urlmap map[string]string
 type URLStore struct {
 	codetoURL urlmap
 	urltoCode urlmap
-	mu        sync.Mutex
+	mu        sync.RWMutex
 }
 
 func (store *URLStore) Shorten(rawurl string) (string, error) {
@@ -24,9 +24,12 @@ func (store *URLStore) Shorten(rawurl string) (string, error) {
 		return "", nil
 	}
 
+	store.mu.RLock()
+
 	if code, exists := store.urltoCode[normalizedurl]; exists {
 		return code, nil
 	}
+	store.mu.RUnlock()
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -58,6 +61,8 @@ func (store *URLStore) Shorten(rawurl string) (string, error) {
 }
 
 func (store *URLStore) GetURLfromCode(code string) (string, error) {
+	store.mu.Lock()
+	defer store.mu.RUnlock()
 	if url, exists := store.codetoURL[code]; exists {
 		return url, nil
 	}
