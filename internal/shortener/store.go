@@ -18,6 +18,13 @@ type URLStore struct {
 	mu        sync.RWMutex
 }
 
+func NewURLStore() *URLStore {
+	return &URLStore{
+		codetoURL: make(urlmap),
+		urltoCode: make(urlmap),
+	}
+}
+
 func (store *URLStore) Shorten(rawurl string) (string, error) {
 	normalizedurl, err := NormalizeURL(rawurl)
 	if err != nil {
@@ -61,7 +68,7 @@ func (store *URLStore) Shorten(rawurl string) (string, error) {
 }
 
 func (store *URLStore) GetURLfromCode(code string) (string, error) {
-	store.mu.Lock()
+	store.mu.RLock()
 	defer store.mu.RUnlock()
 	if url, exists := store.codetoURL[code]; exists {
 		return url, nil

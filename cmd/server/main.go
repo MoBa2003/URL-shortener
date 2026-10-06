@@ -1,32 +1,30 @@
 package main
 
 import (
-	"fmt"
-	"reflect"
+	"flag"
+	"log"
+	"net/http"
 	"urlshortener/internal/shortener"
 )
 
 func main() {
-	fmt.Println("                  fijjwifj efjkewp     jfpwjfwp               pfrjewpjf  fef            ")
-	fmt.Println(shortener.NormalizeURL("        https://www.youtube.com/watch?v=qEo9z_KNWEk&list=WL&index=3               "))
-	x := "salam"
-	for _, val := range x {
-		fmt.Println(reflect.TypeOf(val))
+
+	addr := flag.String("addr", ":8080", "HTTP server listen address")
+	baseurl := flag.String("base", "http://localhost:8080", "Base URL for short links")
+
+	flag.Parse()
+
+	store := shortener.NewURLStore()
+	handler := shortener.NewHandler(store, *baseurl)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/shorten", handler.Shorten)
+	mux.HandleFunc("GET /{code}", handler.Redirect)
+
+	log.Printf("Server Listening on %s (base URL: %s)", *addr, *baseurl)
+
+	if err := http.ListenAndServe(*addr, mux); err != nil {
+		log.Fatalf("Server Failed to Start: %v", err)
 	}
 
-	fmt.Println(shortener.GenerateCode(6))
-
-	info1 := info{name: "mammad", lname: "sharaf", data: 13}
-	info1.changename("reza")
-	fmt.Println(info1)
-}
-
-type info struct {
-	name  string
-	lname string
-	data  any
-}
-
-func (sample *info) changename(newname string) {
-	(*sample).name = newname
 }

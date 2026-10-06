@@ -4,11 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 )
 
 type Handler struct {
 	store   *URLStore
 	baseURL string
+}
+
+func NewHandler(store *URLStore, baseURL string) *Handler {
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	return &Handler{
+		store:   store,
+		baseURL: baseURL,
+	}
 }
 
 func (handler *Handler) Shorten(w http.ResponseWriter, r *http.Request) {
