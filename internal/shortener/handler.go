@@ -60,12 +60,7 @@ func (handler *Handler) Shorten(w http.ResponseWriter, r *http.Request) {
 
 func (handler *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
-	if code == "" {
-		http.Error(w, `{"error":"missing code"}`, http.StatusBadRequest)
-		return
-	}
-
-	longurl, err := handler.store.GetURLfromCode(code)
+	metadata, err := handler.store.GetMetadatafromCode(code)
 	if err != nil {
 		if errors.Is(err, NotFoundErr) {
 			http.Error(w, `{"error":"code not found"}`, http.StatusNotFound)
@@ -74,5 +69,21 @@ func (handler *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, longurl, http.StatusFound)
+	http.Redirect(w, r, metadata.Longurl, http.StatusFound)
+}
+
+func (handler *Handler) GetMetaData(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	metadata, err := handler.store.GetMetadatafromCode(code)
+	if err != nil {
+		if errors.Is(err, NotFoundErr) {
+			http.Error(w, `{"error":"code not found"}`, http.StatusNotFound)
+			return
+		}
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(metadata)
 }

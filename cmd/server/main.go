@@ -20,6 +20,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/shorten", handler.Shorten)
 	mux.HandleFunc("GET /{code}", handler.Redirect)
+	mux.HandleFunc("GET /api/v1/links/{code}", handler.GetMetaData)
 
 	log.Printf("Server Listening on %s (base URL: %s)", *addr, *baseurl)
 

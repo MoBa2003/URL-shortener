@@ -6,24 +6,45 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-type urlmap map[string]string
+type MetaData struct {
+	Longurl   string    `json:"url"`
+	CreatedAt time.Time `json:"created_at"`
+}
 
 type URLStore struct {
-	codetoURL urlmap
-	urltoCode urlmap
-	mu        sync.RWMutex
+	codetoMetaData map[string]MetaData
+	urltoCode      map[string]string
+	mu             sync.RWMutex
 }
 
 func NewURLStore() *URLStore {
 	return &URLStore{
-		codetoURL: make(urlmap),
-		urltoCode: make(urlmap),
+		codetoMetaData: make(map[string]MetaData),
+		urltoCode:      make(map[string]string),
 	}
 }
+
+// func (store *URLStore) FillMetaData(code string) (MetaData, error) {
+
+// 	store.mu.RLock()
+// 	if metadata, exists := store.metadata[code]; exists {
+// 		return metadata, nil
+// 	}
+// 	store.mu.RUnlock()
+
+// 	store.mu.Lock()
+// 	defer store.mu.Unlock()
+
+// 	if metadata, exists := store.metadata[code]; exists {
+// 		return metadata, nil
+// 	}
+
+// }
 
 func (store *URLStore) Shorten(rawurl string) (string, error) {
 	normalizedurl, err := NormalizeURL(rawurl)
@@ -51,7 +72,7 @@ func (store *URLStore) Shorten(rawurl string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if _, exists := store.codetoURL[code]; !exists {
+		if _, exists := store.codetoMetaData[code]; !exists {
 			generatedcode = code
 			break
 		}
@@ -63,17 +84,17 @@ func (store *URLStore) Shorten(rawurl string) (string, error) {
 	}
 
 	store.urltoCode[normalizedurl] = generatedcode
-	store.codetoURL[generatedcode] = normalizedurl
+	store.codetoMetaData[generatedcode] = MetaData{Longurl: normalizedurl, CreatedAt: time.Now().UTC()}
 	return generatedcode, nil
 }
 
-func (store *URLStore) GetURLfromCode(code string) (string, error) {
+func (store *URLStore) GetMetadatafromCode(code string) (MetaData, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	if url, exists := store.codetoURL[code]; exists {
-		return url, nil
+	if metadata, exists := store.codetoMetaData[code]; exists {
+		return metadata, nil
 	}
-	return "", NotFoundErr
+	return MetaData{}, NotFoundErr
 }
 
 func NormalizeURL(rawurl string) (string, error) {
