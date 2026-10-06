@@ -2,34 +2,31 @@ package main
 
 import (
 	"fmt"
-	"math"
+	"reflect"
+	"urlshortener/internal/shortener"
 )
 
 func main() {
-	// x := 10
-	fmt.Println(calculatesum(25))
-	fmt.Println(containsNearbyDuplicate([]int{1, 2, 3, 4, 2}, 3))
+	fmt.Println("                  fijjwifj efjkewp     jfpwjfwp               pfrjewpjf  fef            ")
+	fmt.Println(shortener.NormalizeURL("        https://www.youtube.com/watch?v=qEo9z_KNWEk&list=WL&index=3               "))
+	x := "salam"
+	for _, val := range x {
+		fmt.Println(reflect.TypeOf(val))
+	}
 
+	fmt.Println(shortener.GenerateCode(6))
+
+	info1 := info{name: "mammad", lname: "sharaf", data: 13}
+	info1.changename("reza")
+	fmt.Println(info1)
 }
 
-func calculatesum(n int) (sum int) {
-	for n > 0 {
-		r := n % 10
-		sum += r * r
-		n /= 10
-	}
-	return
+type info struct {
+	name  string
+	lname string
+	data  any
 }
 
-func containsNearbyDuplicate(nums []int, k int) bool {
-	mymap := map[int]int{}
-
-	for idx, val := range nums {
-        if lastidx,exists := mymap[val];exists && math.Abs(float64(idx)-float64(lastidx)) <= float64(k){
-         return true
-        }
-        mymap[val] = idx
-	}
-	return false
-
+func (sample *info) changename(newname string) {
+	(*sample).name = newname
 }
