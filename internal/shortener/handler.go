@@ -7,6 +7,15 @@ import (
 	"strings"
 )
 
+type ShortenRequest struct {
+	URL string `json:"url"`
+}
+
+type ShortenResponse struct {
+	Code     string `json:"code"`
+	ShortURL string `json:"short_url"`
+}
+
 type Handler struct {
 	store   *URLStore
 	baseURL string
@@ -22,11 +31,13 @@ func NewHandler(store *URLStore, baseURL string) *Handler {
 
 func (handler *Handler) Shorten(w http.ResponseWriter, r *http.Request) {
 	var req ShortenRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&req)
+	if err != nil || req.URL == "" {
 		http.Error(w, `{"error":"invalid json body"}`, http.StatusBadRequest)
 		return
 	}
-
 	code, err := handler.store.Shorten(req.URL)
 	if err != nil {
 		if errors.Is(err, InvalidURLErr) {
@@ -64,13 +75,4 @@ func (handler *Handler) Redirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, longurl, http.StatusFound)
-}
-
-type ShortenRequest struct {
-	URL string `json:"url"`
-}
-
-type ShortenResponse struct {
-	Code     string `json:"code"`
-	ShortURL string `json:"short_url"`
 }

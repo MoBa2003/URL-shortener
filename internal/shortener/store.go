@@ -28,7 +28,7 @@ func NewURLStore() *URLStore {
 func (store *URLStore) Shorten(rawurl string) (string, error) {
 	normalizedurl, err := NormalizeURL(rawurl)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 
 	store.mu.RLock()
