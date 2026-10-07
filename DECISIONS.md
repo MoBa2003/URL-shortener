@@ -46,9 +46,9 @@
   - **Sentinel Errors**: Defined `ErrNotFound` and `ErrInvalidURL` at the store/domain layer.
   - **Error Inspection**: Handlers inspect underlying errors using `errors.Is(err, ErrNotFound)` and `errors.Is(err, ErrInvalidURL)` after error wrapping (`%w`).
   - **HTTP Status Mapping**:
-    - `ErrInvalidURL` \\(\rightarrow\\) **HTTP 400 Bad Request** with structured JSON error response.
-    - `ErrNotFound` \\(\rightarrow\\) **HTTP 404 Not Found** with structured JSON error response.
-    - Unhandled internal errors \\(\rightarrow\\) **HTTP 500 Internal Server Error**.
+    - `ErrInvalidURL` \\(\rightarrow\\) **HTTP 400 BadRequest** with structured JSON error response.
+    - `ErrNotFound` \\(\rightarrow\\) **HTTP 404 NotFound** with structured JSON error response.
+    - Unhandled internal errors \\(\rightarrow\\) **HTTP 500 InternalServerError**.
 
 - **Isolated HTTP Testing via `FakeStore`**:
   - **Rationale**: The concrete `URLStore` relies on non-deterministic code generation (`crypto/rand`) and cannot easily simulate unexpected storage failures (such as database read timeouts or disk I/O errors).
