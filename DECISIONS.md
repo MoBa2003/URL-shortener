@@ -57,3 +57,22 @@
 
 - **Preservation of Idempotency**:
   - Idempotency logic (`urlToCode` lookup) is preserved within the store implementations behind the `Store` interface. Re-submitting an identical normalized URL consistently returns the original short code and metadata across all API callers.
+
+
+---
+
+## Phase 3
+
+- **Locking Choice**:
+  - **Choice**: `sync.RWMutex`
+  - **Rationale**: In a typical URL shortener service, read operations (redirects and metadata lookups via `GET`) vastly outnumber write operations (creating new short URLs via `POST`). `sync.RWMutex` allows multiple concurrent readers to acquire `RLock()` simultaneously without blocking each other, ensuring high throughput for redirect operations while protecting the map from data races. Exclusive `Lock()` is only acquired during new link insertions.
+
+- **Timeout Values & Slow-Client Protection**:
+  - `ReadHeaderTimeout`: Set to `2s`. Mitigates **Slowloris attacks** by requiring HTTP request headers to be read promptly.
+  - `ReadTimeout`: Set to `5s`. Caps the total duration allowed to read the entire request payload.
+  - `WriteTimeout`: Set to `10s`. Ensures connections hung on slow network clients are released cleanly.
+  - `IdleTimeout`: Set to `120s`. Controls keep-alive connection reuse efficiency while freeing idle file descriptors.
+
+- **Eviction Cap**:
+  - **Decision**: No in-memory memory cap or LRU eviction strategy was introduced in this phase.
+  - **Rationale**: For an in-memory storage layer in single-binary scope, simple map synchronization offers maximum performance. Memory eviction boundaries and TTL features are deferred to persistent database or external cache layers (e.g., Redis) in advanced tiers.
