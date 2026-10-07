@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 	"urlshortener/internal/shortener"
 )
 
@@ -22,9 +23,18 @@ func main() {
 	mux.HandleFunc("GET /{code}", handler.Redirect)
 	mux.HandleFunc("GET /api/v1/links/{code}", handler.GetMetaData)
 
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	log.Printf("Server Listening on %s (base URL: %s)", *addr, *baseurl)
 
-	if err := http.ListenAndServe(*addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("Server Failed to Start: %v", err)
 	}
 
