@@ -29,23 +29,6 @@ func NewURLStore() *URLStore {
 	}
 }
 
-// func (store *URLStore) FillMetaData(code string) (MetaData, error) {
-
-// 	store.mu.RLock()
-// 	if metadata, exists := store.metadata[code]; exists {
-// 		return metadata, nil
-// 	}
-// 	store.mu.RUnlock()
-
-// 	store.mu.Lock()
-// 	defer store.mu.Unlock()
-
-// 	if metadata, exists := store.metadata[code]; exists {
-// 		return metadata, nil
-// 	}
-
-// }
-
 func (store *URLStore) Shorten(rawurl string) (string, error) {
 	normalizedurl, err := NormalizeURL(rawurl)
 	if err != nil {

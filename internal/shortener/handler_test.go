@@ -3,14 +3,15 @@ package shortener
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
-func TestShortenAndRedirect(t *testing.T) {
+func TestShortenAndRedirect_Integration(t *testing.T) {
 	store := NewURLStore()
 	handler := NewHandler(store, "http://localhost:8080")
 
@@ -53,7 +54,7 @@ func TestShortenAndRedirect(t *testing.T) {
 	}
 }
 
-func TestIdempotency(t *testing.T) {
+func TestIdempotency_Integration(t *testing.T) {
 	store := NewURLStore()
 	handler := NewHandler(store, "http://localhost:8080")
 
@@ -85,7 +86,7 @@ func TestIdempotency(t *testing.T) {
 	}
 }
 
-func TestTableErrors(t *testing.T) {
+func TestTableErrors_Integration(t *testing.T) {
 	store := NewURLStore()
 	handler := NewHandler(store, "http://localhost:8080")
 
@@ -135,7 +136,7 @@ func TestTableErrors(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, bytes.NewBufferString(tt.body))
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
-			fmt.Println(tt.name, " ", rec.Code)
+
 			if rec.Code != tt.expectedStatus {
 				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
 			}
@@ -143,7 +144,7 @@ func TestTableErrors(t *testing.T) {
 	}
 }
 
-func TestConcurrentShorten(t *testing.T) {
+func TestConcurrentShorten_Integration(t *testing.T) {
 	store := NewURLStore()
 	handler := NewHandler(store, "http://localhost:8080")
 
@@ -183,5 +184,220 @@ func TestConcurrentShorten(t *testing.T) {
 		} else if code != firstCode {
 			t.Fatalf("concurrent idempotency failed: expected %s, got %s", firstCode, code)
 		}
+	}
+}
+
+// Test Handler by isolating the Store (Specifically to Test Handler Behaviour During All Kinds of Errors)
+func TestShortenHandler_AllCases(t *testing.T) {
+	tests := []struct {
+		name           string
+		reqBody        string
+		setupFake      func(f *FakeStore)
+		expectedStatus int
+		checkResponse  func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:    "OkPath - Success 201 Created",
+			reqBody: `{"url":"https://example.com/test-path"}`,
+			setupFake: func(f *FakeStore) {
+
+			},
+			expectedStatus: http.StatusCreated,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var resp ShortenResponse
+				if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+					t.Fatalf("failed to decode response JSON: %v", err)
+				}
+				if resp.Code == "" {
+					t.Error("expected non-empty code")
+				}
+				if resp.ShortURL != "http://localhost:8080/"+resp.Code {
+					t.Errorf("unexpected short_url: got %s", resp.ShortURL)
+				}
+			},
+		},
+		{
+			name:           "Invalid Body JSON - 400 Bad Request",
+			reqBody:        `{invalid-json}`,
+			setupFake:      func(f *FakeStore) {},
+			expectedStatus: http.StatusBadRequest,
+			checkResponse:  func(t *testing.T, rec *httptest.ResponseRecorder) {},
+		},
+		{
+			name:           "Invalid URL Scheme - 400 Bad Request",
+			reqBody:        `{"url":"ftp://invalid-scheme.com"}`,
+			setupFake:      func(f *FakeStore) {},
+			expectedStatus: http.StatusBadRequest,
+			checkResponse:  func(t *testing.T, rec *httptest.ResponseRecorder) {},
+		},
+		{
+			name:    "Internal Store Error - 500 Internal Server Error",
+			reqBody: `{"url":"https://example.com/ok"}`,
+			setupFake: func(f *FakeStore) {
+				f.ShortenErr = errors.New("unexpected database crash")
+			},
+			expectedStatus: http.StatusInternalServerError,
+			checkResponse:  func(t *testing.T, rec *httptest.ResponseRecorder) {},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := NewFakeStore()
+			tt.setupFake(fake)
+
+			handler := NewHandler(fake, "http://localhost:8080")
+
+			req := httptest.NewRequest("POST", "/api/shorten", bytes.NewBufferString(tt.reqBody))
+			rec := httptest.NewRecorder()
+
+			handler.Shorten(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+			tt.checkResponse(t, rec)
+		})
+	}
+}
+
+func TestRedirectHandler_AllCases(t *testing.T) {
+	tests := []struct {
+		name           string
+		codeParam      string
+		setupFake      func(f *FakeStore)
+		expectedStatus int
+		expectedLoc    string
+	}{
+		{
+			name:      "OkPath - Success 302 Found",
+			codeParam: "valid123",
+			setupFake: func(f *FakeStore) {
+				f.SetMetadata("valid123", MetaData{
+					Longurl:   "https://example.com/target",
+					CreatedAt: time.Now().UTC(),
+				})
+			},
+			expectedStatus: http.StatusFound,
+			expectedLoc:    "https://example.com/target",
+		},
+		{
+			name:           "Code Not Found - 404 Not Found",
+			codeParam:      "nonexistent",
+			setupFake:      func(f *FakeStore) {},
+			expectedStatus: http.StatusNotFound,
+			expectedLoc:    "",
+		},
+		{
+			name:      "Internal Store Error - 500 Internal Server Error",
+			codeParam: "valid123",
+			setupFake: func(f *FakeStore) {
+				f.GetErr = errors.New("disk read error")
+			},
+			expectedStatus: http.StatusInternalServerError,
+			expectedLoc:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := NewFakeStore()
+			tt.setupFake(fake)
+
+			handler := NewHandler(fake, "http://localhost:8080")
+
+			req := httptest.NewRequest("GET", "/"+tt.codeParam, nil)
+			if tt.codeParam != "" {
+				req.SetPathValue("code", tt.codeParam)
+			}
+			rec := httptest.NewRecorder()
+
+			handler.Redirect(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+
+			if tt.expectedLoc != "" {
+				loc := rec.Header().Get("Location")
+				if loc != tt.expectedLoc {
+					t.Errorf("expected Location header %s, got %s", tt.expectedLoc, loc)
+				}
+			}
+		})
+	}
+}
+
+func TestGetMetaDataHandler_AllCases(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	tests := []struct {
+		name           string
+		codeParam      string
+		setupFake      func(f *FakeStore)
+		expectedStatus int
+		checkResponse  func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:      "OkPath - Success 200 OK",
+			codeParam: "meta123",
+			setupFake: func(f *FakeStore) {
+				f.SetMetadata("meta123", MetaData{
+					Longurl:   "https://golang.org/doc",
+					CreatedAt: now,
+				})
+			},
+			expectedStatus: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var meta MetaData
+				if err := json.NewDecoder(rec.Body).Decode(&meta); err != nil {
+					t.Fatalf("failed to decode metadata JSON: %v", err)
+				}
+				if meta.Longurl != "https://golang.org/doc" {
+					t.Errorf("expected URL https://golang.org/doc, got %s", meta.Longurl)
+				}
+				if !meta.CreatedAt.Equal(now) {
+					t.Errorf("expected CreatedAt %v, got %v", now, meta.CreatedAt)
+				}
+			},
+		},
+		{
+			name:           "Code Not Found - 404 Not Found",
+			codeParam:      "unknown_code",
+			setupFake:      func(f *FakeStore) {},
+			expectedStatus: http.StatusNotFound,
+			checkResponse:  func(t *testing.T, rec *httptest.ResponseRecorder) {},
+		},
+		{
+			name:      "Internal Store Error - 500 Internal Server Error",
+			codeParam: "meta123",
+			setupFake: func(f *FakeStore) {
+				f.GetErr = errors.New("database connection timeout")
+			},
+			expectedStatus: http.StatusInternalServerError,
+			checkResponse:  func(t *testing.T, rec *httptest.ResponseRecorder) {},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := NewFakeStore()
+			tt.setupFake(fake)
+
+			handler := NewHandler(fake, "http://localhost:8080")
+
+			req := httptest.NewRequest("GET", "/api/v1/links/"+tt.codeParam, nil)
+			if tt.codeParam != "" {
+				req.SetPathValue("code", tt.codeParam)
+			}
+			rec := httptest.NewRecorder()
+
+			handler.GetMetaData(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+			tt.checkResponse(t, rec)
+		})
 	}
 }
