@@ -36,18 +36,17 @@
     ```go
     type Store interface {
         Shorten(rawURL string) (string, error)
-        Get(code string) (string, error)
         GetMetadatafromCode(code string) (MetaData, error)
     }
     ```
   - **Rationale**: Decouples the HTTP handlers from concrete storage implementations (`URLStore`). This allows seamless substitution of persistent storage engines (e.g., SQL/GORM or File-based store in Part 4) or test doubles (`FakeStore`) without altering a single line of HTTP handler logic.
 
 - **Domain Sentinel Errors & Error Mapping Strategy**:
-  - **Sentinel Errors**: Defined `ErrNotFound` and `ErrInvalidURL` at the store/domain layer.
-  - **Error Inspection**: Handlers inspect underlying errors using `errors.Is(err, ErrNotFound)` and `errors.Is(err, ErrInvalidURL)` after error wrapping (`%w`).
+  - **Sentinel Errors**: Defined `NotFoundErr` and `InvalidURLErr` at the internal/shortenerr/errors.go file.
+  - **Error Inspection**: Handlers inspect underlying errors using `errors.Is(err, NotFoundErr)` and `errors.Is(err, InvalidURLErr)` after error wrapping (`%w`).
   - **HTTP Status Mapping**:
-    - `ErrInvalidURL` \\(\rightarrow\\) **HTTP 400 BadRequest** with structured JSON error response.
-    - `ErrNotFound` \\(\rightarrow\\) **HTTP 404 NotFound** with structured JSON error response.
+    - `InvalidURLErr` \\(\rightarrow\\) **HTTP 400 BadRequest** with structured JSON error response.
+    - `NotFoundErr` \\(\rightarrow\\) **HTTP 404 NotFound** with structured JSON error response.
     - Unhandled internal errors \\(\rightarrow\\) **HTTP 500 InternalServerError**.
 
 - **Isolated HTTP Testing via `FakeStore`**:
@@ -76,3 +75,31 @@
 - **Eviction Cap**:
   - **Decision**: No in-memory memory cap or LRU eviction strategy was introduced in this phase.
   - **Rationale**: For an in-memory storage layer in single-binary scope, simple map synchronization offers maximum performance. Memory eviction boundaries and TTL features are deferred to persistent database or external cache layers (e.g., Redis) in advanced tiers.
+
+
+---
+
+## Phase 4
+
+- **Storage Choice**:
+  - **Selected Engine**: GORM + PostgreSQL (`gorm.io/driver/postgres`).
+  - **Rationale**: PostgreSQL provides robust transactional guarantees, high performance, and reliable crash safety for production workloads. GORM abstracts database interactions cleanly while allowing native PostgreSQL indexing features.
+
+- **Schema, Models & Migrations**:
+  - **Model**: `URLModel` struct defined with GORM tags:
+    - `Code`: Primary Key (`type:varchar(10)`).
+    - `LongURL`: Unique Index (`type:text`, `not null`).
+    - `CreatedAt`: Timestamp (`not null`).
+  - **Migrations**: Handled automatically on application startup via `db.AutoMigrate(&URLModel{})`.
+
+- **Crash Safety & Atomicity**:
+  - Insert operations directly issue `db.Create()`, taking advantage of PostgreSQL's ACID transaction boundaries.
+  - Links are fully committed to durable storage **prior to returning the HTTP 201 Created response**, guaranteeing no link loss upon sudden server crashes.
+
+- **How `created_at` is Stored**:
+  - Stored as standard `time.Time` mapped to PostgreSQL's `TIMESTAMPTZ` / `TIMESTAMP` types in UTC.
+  - Serializes transparently to RFC3339 standard JSON strings during API responses.
+
+- **Idempotency + Persistence**:
+  - Idempotency is preserved across server restarts by querying the unique index on `long_url` before generating new short codes.
+  - Submitting an identical normalized long URL after a database or server restart retrieves the original short code record from PostgreSQL, maintaining 100% consistency with Part 1 domain rules.
