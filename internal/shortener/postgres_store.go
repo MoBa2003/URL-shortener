@@ -58,9 +58,15 @@ func (p *PostgresStore) Shorten(rawurl string) (string, error) {
 			LongURL:   normalizedurl,
 			CreatedAt: time.Now().UTC(),
 		}
-
-		if err := p.db.Create(&newRecord).Error; err == nil {
+		myerr := p.db.Create(&newRecord).Error
+		if myerr == nil {
 			return code, nil
+		}
+
+		var concurrentRecord URLModel
+		checkErr := p.db.Where("long_url = ?", normalizedurl).First(&concurrentRecord).Error
+		if checkErr == nil {
+			return concurrentRecord.Code, nil
 		}
 
 	}
