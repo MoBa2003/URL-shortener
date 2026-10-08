@@ -150,3 +150,29 @@
     *   **Read/Redirect Partitioning**: When a single PostgreSQL or Redis node reaches memory/disk limits, keys are sharded across database nodes using consistent hashing on the short `code`.
     *   **Redis Cluster Sharding**: Uses Redis Cluster hash slots (\\(16,384\\) slots based on `CRC16(code)`). Related keys use hash tags (e.g., `{code}:meta`) to guarantee placement on the same cluster node for pipeline efficiency.
     *   **Global Idempotency Index**: Long URL lookup for idempotency across shards is routed via a distributed hash table or dedicated secondary index mapping `Hash(long_url) -> Shard_ID`.
+
+
+    ---
+    ## Phase 6 — Production Habits
+
+## Dependencies
+- `golang.org/x/time/rate`: Used to implement the Token Bucket rate-limiting algorithm efficiently for the POST `/api/shorten` endpoint to prevent spam and abuse.
+
+- **Graceful Shutdown**:
+  - Implemented using `signal.Notify` to trap `SIGINT` and `SIGTERM`.
+  - Upon receiving the signal, `srv.Shutdown(ctx)` is called with a **10-second timeout context**. 
+  - **Drain Strategy:** The server stops accepting new connections immediately but allows currently in-flight requests (such as DB writes or Redis caching) up to 10 seconds to finish successfully before terminating the process.
+
+- **Rate Limiting**:
+  - A per-IP Token Bucket rate limiter was implemented exclusively for the write path (`POST /api/shorten`).
+  - **Parameters:** Each client IP is limited to 5 requests per second with a burst capacity (bucket size) of 10. Exceeding this limit returns HTTP 429 Too Many Requests.
+
+- **Domain Policy (Blocklist)**:
+  - Added a strict blocklist check before URL generation.
+  - **Rules:** The domains `phishing.com`, `malware.org`, `localhost`, and `127.0.0.1` are permanently blocked. Blocking localhost/127.0.0.1 provides a fundamental layer of protection against internal SSRF (Server-Side Request Forgery) attacks. Blocked URLs return HTTP 403 Forbidden.
+
+- **Observability & Safe Logging (Bonus Claim)**:
+  - **Structured Logging:** Adopted Go 1.21's `log/slog` to output structured JSON logs to `stdout`, replacing the standard text logger for better machine readability in production environments.
+  - **What is logged:** HTTP Method, sanitized Path, Status Code, IP address, and Request Duration.
+  - **What is NEVER logged:** Full URLs and raw query strings (`?token=secret`). The `LoggingMiddleware` explicitly clears `r.URL.RawQuery` before logging the request to guarantee that secrets, API tokens, or user session parameters passed via URL are never persisted in server logs.
+  - **pprof Profiling:** The standard `net/http/pprof` endpoints are conditionally registered behind a `-pprof` CLI flag, allowing operators to profile CPU and memory on demand without exposing debug endpoints by default.

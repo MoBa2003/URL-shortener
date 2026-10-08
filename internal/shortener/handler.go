@@ -13,6 +13,7 @@ var blockedDomains = map[string]bool{
 	"malware.org":  true,
 	"localhost":    true,
 	"127.0.0.1":    true,
+	// "google.com":   true,
 }
 
 func isBlocked(rawURL string) bool {
