@@ -58,7 +58,6 @@ func (r *RedisStore) Shorten(rawURL string) (string, error) {
 	meta, err := r.underlying.GetMetadatafromCode(code)
 	if err == nil {
 		metaBytes, _ := json.Marshal(meta)
-		_ = r.client.Set(ctx, "code:"+code, normURL, r.ttl).Err()
 		_ = r.client.Set(ctx, "meta:"+code, metaBytes, r.ttl).Err()
 		_ = r.client.Set(ctx, urlKey, code, r.ttl).Err()
 	}
@@ -85,6 +84,7 @@ func (r *RedisStore) GetMetadatafromCode(code string) (MetaData, error) {
 
 	metaBytes, _ := json.Marshal(meta)
 	_ = r.client.Set(ctx, metaKey, metaBytes, r.ttl).Err()
+	_ = r.client.Set(ctx, "url:"+meta.Longurl, code, r.ttl).Err()
 
 	return meta, nil
 }
