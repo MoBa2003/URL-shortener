@@ -8,14 +8,34 @@ import (
 	"urlshortener/internal/shortener"
 )
 
+var postgres_dbconfig = shortener.NewDBConfig("localhost", "postgres", "postgres", "urlshortener", "5432", "disable")
+
 func main() {
 
 	addr := flag.String("addr", ":8080", "HTTP server listen address")
 	baseurl := flag.String("base", "http://localhost:8080", "Base URL for short links")
+	store_type := flag.String("store", "memory", "store type: 'memory' or 'postgres'")
+	dsn := flag.String("dsn", postgres_dbconfig.GetFormattedString(), "postgres DSN string")
 
 	flag.Parse()
 
-	store := shortener.NewURLStore()
+	var store shortener.Store
+	var err error
+
+	switch *store_type {
+	case "postgres":
+		log.Println("Initializing Postgres DB ...")
+		store, err = shortener.NewPostgresStore(*dsn)
+		if err != nil {
+			log.Fatalf("Failed to Initialize Postgres : %v", err)
+		}
+	case "memory":
+		log.Println("Initializing in_memory store...")
+		store = shortener.NewURLStore()
+	default:
+		log.Fatalf("Unknown store type , please Enter the Store type (postgres or memory)")
+	}
+
 	handler := shortener.NewHandler(store, *baseurl)
 
 	mux := http.NewServeMux()
