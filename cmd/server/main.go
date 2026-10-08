@@ -16,27 +16,41 @@ func main() {
 	baseurl := flag.String("base", "http://localhost:8080", "Base URL for short links")
 	store_type := flag.String("store", "memory", "store type: 'memory' or 'postgres'")
 	dsn := flag.String("dsn", postgres_dbconfig.GetFormattedString(), "postgres DSN string")
+	redisAddr := flag.String("redis-addr", "", "Redis server address (e.g., localhost:6379). If provided, enables Redis Caching.")
+	redisPass := flag.String("redis-pass", "", "Redis password")
+	redisTTL := flag.Duration("redis-ttl", 24*time.Hour, "Cache TTL duration for Redis")
 
 	flag.Parse()
 
-	var store shortener.Store
+	var baseStore shortener.Store
 	var err error
 
 	switch *store_type {
 	case "postgres":
 		log.Println("Initializing Postgres DB ...")
-		store, err = shortener.NewPostgresStore(*dsn)
+		baseStore, err = shortener.NewPostgresStore(*dsn)
 		if err != nil {
 			log.Fatalf("Failed to Initialize Postgres : %v", err)
 		}
 	case "memory":
 		log.Println("Initializing in_memory store...")
-		store = shortener.NewURLStore()
+		baseStore = shortener.NewURLStore()
 	default:
 		log.Fatalf("Unknown store type , please Enter the Store type (postgres or memory)")
 	}
 
-	handler := shortener.NewHandler(store, *baseurl)
+	finalStore := baseStore
+
+	if *redisAddr != "" {
+		log.Printf("Wrapping store with Redis Caching Layer (addr: %s, ttl: %v)...", *redisAddr, *redisTTL)
+		redisStore, err := shortener.NewRedisStore(*redisAddr, *redisPass, 0, baseStore, *redisTTL)
+		if err != nil {
+			log.Fatalf("Failed to initialize Redis store: %v", err)
+		}
+		finalStore = redisStore
+	}
+
+	handler := shortener.NewHandler(finalStore, *baseurl)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/shorten", handler.Shorten)
