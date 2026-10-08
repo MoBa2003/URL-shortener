@@ -4,8 +4,24 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 )
+
+var blockedDomains = map[string]bool{
+	"phishing.com": true,
+	"malware.org":  true,
+	"localhost":    true,
+	"127.0.0.1":    true,
+}
+
+func isBlocked(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	return blockedDomains[strings.ToLower(parsed.Hostname())]
+}
 
 type Store interface {
 	Shorten(rawurl string) (string, error)
@@ -43,6 +59,12 @@ func (handler *Handler) Shorten(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json body"}`, http.StatusBadRequest)
 		return
 	}
+
+	if isBlocked(req.URL) {
+		http.Error(w, `{"error":"domain is not allowed"}`, http.StatusForbidden)
+		return
+	}
+
 	code, err := handler.store.Shorten(req.URL)
 	if err != nil {
 		if errors.Is(err, InvalidURLErr) {
