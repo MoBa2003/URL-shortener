@@ -38,6 +38,7 @@ func (store *URLStore) Shorten(rawurl string) (string, error) {
 	store.mu.RLock()
 
 	if code, exists := store.urltoCode[normalizedurl]; exists {
+		store.mu.RUnlock()
 		return code, nil
 	}
 	store.mu.RUnlock()
