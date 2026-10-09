@@ -2,8 +2,8 @@ package shortener
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -29,19 +29,24 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		rec := &responseRecorder{
 			ResponseWriter: w,
-			statusCode:     http.StatusOK, // پیش‌فرض
+			statusCode:     http.StatusOK,
 		}
 
 		next.ServeHTTP(rec, r)
 
 		duration := time.Since(start)
 
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+
 		slog.Info("HTTP Request",
 			slog.String("method", r.Method),
 			slog.String("path", cleanURL.Path),
 			slog.Int("status", rec.statusCode),
 			slog.String("duration", duration.String()),
-			slog.String("ip", strings.Split(r.RemoteAddr, ":")[0]),
+			slog.String("ip", ip),
 		)
 	})
 }
@@ -65,7 +70,11 @@ func getVisitor(ip string) *rate.Limiter {
 
 func RateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := strings.Split(r.RemoteAddr, ":")[0]
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+
 		limiter := getVisitor(ip)
 
 		if !limiter.Allow() {

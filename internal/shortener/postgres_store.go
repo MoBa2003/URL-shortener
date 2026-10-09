@@ -32,6 +32,13 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 	}
 	return &PostgresStore{db: db}, nil
 }
+func (p *PostgresStore) Close() error {
+	sqlDB, err := p.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
+}
 
 func (p *PostgresStore) Shorten(rawurl string) (string, error) {
 	normalizedurl, err := NormalizeURL(rawurl)

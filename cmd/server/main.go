@@ -104,4 +104,14 @@ func main() {
 	}
 	slog.Info("Server stopped cleanly.")
 
+	if pgStore, ok := baseStore.(*shortener.PostgresStore); ok {
+		if err := pgStore.Close(); err != nil {
+			slog.Error("Failed to close database connection", "error", err)
+		} else {
+			slog.Info("Database connection closed cleanly.")
+		}
+	}
+
+	slog.Info("Application exited.")
+
 }
