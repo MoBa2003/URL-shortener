@@ -102,6 +102,9 @@ Database inserts execute directly through `db.Create()`, leveraging PostgreSQL's
 ### Persistence & Idempotency Rules
 Idempotency persists across application restarts by checking the unique index on `long_url` prior to generating new short codes. Re-submitting an existing normalized long URL after a database or application reboot retrieves the original short code record from PostgreSQL, maintaining total consistency with Phase 1 domain rules.
 
+### Close Mechanism for PostgresDB Before Finishing the Program
+We run the server inside a separate Goroutine and use a channel in the main Goroutine to intercept OS termination signals. When a shutdown signal is received, we check if the active store is PostgreSQL and explicitly invoke Close() on its connection pool. This prevents resource leaks and lingering socket connections on the database, avoids exhausting PostgreSQL's max_connections limit during service restarts, and ensures active transactions complete cleanly without data corruption.
+
 ## Phase 5: High-Scale Architecture & Distributed Caching
 
 To handle millions of requests, Phase 5 introduces a stateless scale-out architecture backed by Redis caching and edge CDN capabilities.
