@@ -4,6 +4,9 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 	"urlshortener/internal/shortener"
 )
@@ -52,10 +55,24 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("Server Listening on %s (base URL: %s)", *addr, *baseurl)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("Server Failed to Start: %v", err)
+	go func() {
+		log.Printf("Server Listening on %s (base URL: %s)", *addr, *baseurl)
+
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatalf("Server Failed to Start: %v", err)
+		}
+	}()
+
+	<-quit
+	if pgStore, ok := store.(*shortener.PostgresStore); ok {
+		if err := pgStore.Close(); err != nil {
+			log.Printf("Failed to close database connection")
+		} else {
+			log.Printf("Database connection closed")
+		}
 	}
 
 }

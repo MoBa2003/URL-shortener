@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type URLModel struct {
@@ -20,7 +21,7 @@ type PostgresStore struct {
 }
 
 func NewPostgresStore(dsn string) (*PostgresStore, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to connecto to postgres : %w", err)
@@ -30,6 +31,13 @@ func NewPostgresStore(dsn string) (*PostgresStore, error) {
 		return nil, fmt.Errorf("failed to migrate data base scheme : %w", err)
 	}
 	return &PostgresStore{db: db}, nil
+}
+func (p *PostgresStore) Close() error {
+	sqlDB, err := p.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 func (p *PostgresStore) Shorten(rawurl string) (string, error) {
