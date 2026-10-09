@@ -1,178 +1,168 @@
-# Design Decisions
 
-## Phase 1
+# URL Shortener Architecture & Design Decisions
 
-- **URL Normalization**:
-  Two URLs are considered "the same" if their normalized form matches. Normalization consists of trimming whitespace, converting scheme and host to lowercase, and stripping trailing slashes (except for root path `/`).
+## Phase 1: Core Fundamentals & Baseline Memory Store
 
-- **Idempotency Storage**:
-  To guarantee that the same long URL returns the exact same code, `URLStore` maintains two synchronized maps in memory:
-  1. `codeToMetadata map[string]MetaData` (updated in Part 2)
-  2. `urlToCode map[string]string`
-  Before generating a new code, `urlToCode` is checked. If the normalized URL exists, the existing code is immediately returned with status 201 Created.
+When establishing the baseline for the URL shortener service, the primary design focus centers on consistent URL handling, deterministic idempotency, and concurrent thread safety.
 
-- **Code Generation & Collision Handling**:
-  New codes are 6-character URL-safe strings generated randomly using `crypto/rand` from the character set `[a-zA-Z0-9]`. When a new URL is processed, the system checks if the generated code already exists in `codeToMetadata`. If a collision occurs, it retries up to 10 times to generate a unique code.
+### URL Normalization
+To ensure that duplicate representations of a web address map accurately, two URLs are treated as identical whenever their normalized forms match. Normalization applies a standardized sequence: trimming leading and trailing whitespace, converting both the scheme and host components to lowercase, and stripping any trailing slashes, with the sole exception of the root path `/`.
 
-- **Locking Choice**:
-  `sync.RWMutex` is chosen for `URLStore`. Reads (`GetMetadatafromCode` and checking `urlToCode`) acquire `RLock()`, allowing high concurrent throughput for redirects and metadata queries. Writes (`Shorten` insertions) acquire `Lock()`. Double-checking is applied after acquiring the write lock to prevent race conditions during concurrent requests for the same URL.
+### Idempotency & In-Memory Storage Strategy
+Guaranteeing that re-submitting an already processed long URL yields the exact same shortened code requires deterministic lookup mechanics. To achieve this, `URLStore` maintains two synchronized in-memory maps:
+1. `codeToMetadata map[string]MetaData` (which undergoes model enhancement in Phase 2).
+2. `urlToCode map[string]string`.
 
-- **Package Layout**:
-  - `cmd/server/main.go`: Thin entrypoint parsing `-addr` and `-base` flags and starting `http.Server`.
-  - `internal/shortener/`: Core business logic, store, handlers, and unit/integration tests.
+Whenever a request arrives to shorten a link, the system queries `urlToCode` first. If a matching normalized URL is present, the service immediately returns the existing code accompanied by an `HTTP 201 Created` status code.
 
----
+### Code Generation & Collision Mitigation
+Short codes are generated as 6-character, URL-safe random strings constructed using Go's `crypto/rand` package over the alphanumeric character set `[a-zA-Z0-9]`. Upon generating a candidate code, the application verifies whether it already exists within `codeToMetadata`. In the event of a key collision, the system executes an automated retry loop up to 10 times to secure a unique code before proceeding.
 
-## Phase 2
+### Concurrency & Locking Choices
+For thread-safe operations in `URLStore`, `sync.RWMutex` serves as the core synchronization primitive. Read operations—such as retrieving metadata via `GetMetadatafromCode` or executing idempotency checks against `urlToCode`—acquire a read lock (`RLock()`), enabling high concurrent throughput for redirects and metadata queries. Write operations during link creation acquire an exclusive write lock (`Lock()`). To guard against race conditions when concurrent requests attempt to shorten the same URL simultaneously, double-checking logic is applied immediately after securing the write lock.
 
-- **Metadata Endpoint (`GET /api/v1/links/{code}`)**:
-  - **Purpose**: Exposes link creation metadata (`url` and `created_at`) via JSON with HTTP 200 OK for valid codes and HTTP 404 Not Found for missing codes.
-  - **Data Model Change**: Refactored the internal storage map from `map[string]string` to `map[string]MetaData`.
-  - **Type Choice for `created_at`**: The `MetaData` struct defines `CreatedAt` as `time.Time`. Using standard `time.Time` allows Go's `encoding/json` marshaler to automatically format timestamps according to the **RFC3339** standard (`2026-01-15T12:00:00Z`) without manual string parsing.
+### Package Layout
+The project follows a clean architectural layout:
+* `cmd/server/main.go`: Functions as a lightweight entry point responsible for parsing the `-addr` and `-base` CLI flags before starting the standard `http.Server`.
+* `internal/shortener/`: Houses all core business logic, data storage logic, HTTP request handlers, and corresponding unit and integration test suites.
 
-- **Store Interface at Consumer Layer**:
-  - **Location**: The `Store` interface is defined in the consumer package (`internal/shortener/handler.go`), following the idiomatic Go rule *"Accept interfaces, return structs"*.
-  - **Interface Definition**:
-    ```go
-    type Store interface {
-        Shorten(rawURL string) (string, error)
-        GetMetadatafromCode(code string) (MetaData, error)
-    }
-    ```
-  - **Rationale**: Decouples the HTTP handlers from concrete storage implementations (`URLStore`). This allows seamless substitution of persistent storage engines (e.g., SQL/GORM or File-based store in Part 4) or test doubles (`FakeStore`) without altering a single line of HTTP handler logic.
+## Phase 2: Metadata Endpoint, Abstractions, & Domain Safety
 
-- **Domain Sentinel Errors & Error Mapping Strategy**:
-  - **Sentinel Errors**: Defined `NotFoundErr` and `InvalidURLErr` at the internal/shortenerr/errors.go file.
-  - **Error Inspection**: Handlers inspect underlying errors using `errors.Is(err, NotFoundErr)` and `errors.Is(err, InvalidURLErr)` after error wrapping (`%w`).
-  - **HTTP Status Mapping**:
-    - `InvalidURLErr` \\(\rightarrow\\) **HTTP 400 BadRequest** with structured JSON error response.
-    - `NotFoundErr` \\(\rightarrow\\) **HTTP 404 NotFound** with structured JSON error response.
-    - Unhandled internal errors \\(\rightarrow\\) **HTTP 500 InternalServerError**.
+Phase 2 introduces detailed metadata access, clean domain abstraction layers, and robust error mapping across the HTTP layer.
 
-- **Isolated HTTP Testing via `FakeStore`**:
-  - **Rationale**: The concrete `URLStore` relies on non-deterministic code generation (`crypto/rand`) and cannot easily simulate unexpected storage failures (such as database read timeouts or disk I/O errors).
-  - **Implementation**: Created `FakeStore` implementing the `Store` interface. It includes error injection fields (`ShortenErr`, `GetErr`) and direct state setup helpers (`SetMetadata`).
-  - **Outcome**: Allows 100% deterministic unit tests for all HTTP status codes (200, 201, 302, 400, 404, 500) while keeping HTTP layer tests isolated from concrete storage logic.
+### Metadata Endpoint (`GET /api/v1/links/{code}`)
+The metadata endpoint exposes key creation details—specifically the target `url` and the `created_at` timestamp—using JSON payloads. Valid codes receive an `HTTP 200 OK` response, while nonexistent codes return an `HTTP 404 Not Found`.
 
-- **Preservation of Idempotency**:
-  - Idempotency logic (`urlToCode` lookup) is preserved within the store implementations behind the `Store` interface. Re-submitting an identical normalized URL consistently returns the original short code and metadata across all API callers.
+To support this capability, the internal storage map transitioned from a simple `map[string]string` structure to `map[string]MetaData`. Within the `MetaData` struct, `CreatedAt` is explicitly typed as `time.Time`. Leveraging standard `time.Time` allows Go's `encoding/json` package to format timestamps automatically according to the RFC3339 standard (e.g., `2026-01-15T12:00:00Z`), eliminating the need for manual string parsing.
 
+### Consumer-Side Store Interface
+Following the idiomatic Go principle *"Accept interfaces, return structs"*, the `Store` interface is defined directly in the consumer package (`internal/shortener/handler.go`).
 
----
+```go
+type Store interface {
+    Shorten(rawURL string) (string, error)
+    GetMetadatafromCode(code string) (MetaData, error)
+}
+```
 
-## Phase 3
+Defining the interface at the consumption point decouples HTTP handlers from concrete storage mechanics like `URLStore`. This design allows switching to persistent engines (such as SQL/GORM or file-backed stores in Phase 4) or substituting test doubles (`FakeStore`) without modifying handler logic.
 
-- **Locking Choice**:
-  - **Choice**: `sync.RWMutex`
-  - **Rationale**: In a typical URL shortener service, read operations (redirects and metadata lookups via `GET`) vastly outnumber write operations (creating new short URLs via `POST`). `sync.RWMutex` allows multiple concurrent readers to acquire `RLock()` simultaneously without blocking each other, ensuring high throughput for redirect operations while protecting the map from data races. Exclusive `Lock()` is only acquired during new link insertions.
+### Domain Sentinel Errors & HTTP Mapping
+To keep error handling structured, domain-specific sentinel errors—`NotFoundErr` and `InvalidURLErr`—are established in `internal/shortener/errors.go`.
 
-- **Timeout Values & Slow-Client Protection**:
-  - `ReadHeaderTimeout`: Set to `2s`. Mitigates **Slowloris attacks** by requiring HTTP request headers to be read promptly.
-  - `ReadTimeout`: Set to `5s`. Caps the total duration allowed to read the entire request payload.
-  - `WriteTimeout`: Set to `10s`. Ensures connections hung on slow network clients are released cleanly.
-  - `IdleTimeout`: Set to `120s`. Controls keep-alive connection reuse efficiency while freeing idle file descriptors.
+Handlers evaluate incoming errors by unwrapping them using `errors.Is(err, NotFoundErr)` and `errors.Is(err, InvalidURLErr)`. Errors are mapped directly to HTTP responses:
+* `InvalidURLErr` \\(\rightarrow\\) `HTTP 400 Bad Request` with a structured JSON payload.
+* `NotFoundErr` \\(\rightarrow\\) `HTTP 404 Not Found` with a structured JSON payload.
+* Unhandled internal errors \\(\rightarrow\\) `HTTP 500 Internal Server Error`.
 
-- **Eviction Cap**:
-  - **Decision**: No in-memory memory cap or LRU eviction strategy was introduced in this phase.
-  - **Rationale**: For an in-memory storage layer in single-binary scope, simple map synchronization offers maximum performance. Memory eviction boundaries and TTL features are deferred to persistent database or external cache layers (e.g., Redis) in advanced tiers.
+### Isolated Testing with `FakeStore`
+Because `URLStore` relies on non-deterministic random code generation (`crypto/rand`), simulating unexpected storage failures (such as database read timeouts or I/O faults) directly is difficult. To solve this, a `FakeStore` implementing the `Store` interface was created. It includes fields for error injection (`ShortenErr`, `GetErr`) alongside helper methods like `SetMetadata` for state setup. This enables 100% deterministic unit testing across all HTTP status codes (200, 201, 302, 400, 404, 500) while isolating the HTTP layer from storage implementations.
 
+### Idempotency Preservation
+Idempotency enforcement via `urlToCode` lookups remains preserved behind the `Store` interface abstraction. Submitting an identical normalized URL repeatedly returns the original short code and metadata across all API consumers.
 
----
+## Phase 3: Concurrency Optimization & Network Resilience
 
-## Phase 4
+Phase 3 focuses on tuning concurrent synchronization and protecting the server against slow or malicious clients.
 
-- **Storage Choice**:
-  - **Selected Engine**: GORM + PostgreSQL (`gorm.io/driver/postgres`).
-  - **Rationale**: PostgreSQL provides robust transactional guarantees, high performance, and reliable crash safety for production workloads. GORM abstracts database interactions cleanly while allowing native PostgreSQL indexing features.
+### Concurrency Model
+`sync.RWMutex` remains the optimal locking choice. In URL shortening workloads, read operations (redirects and metadata requests) vastly outnumber write operations. Using `sync.RWMutex` allows multiple concurrent readers to acquire `RLock()` simultaneously without blocking one another, ensuring high redirect throughput while safeguarding maps against data races. Exclusive write locks (`Lock()`) are restricted strictly to new link insertions.
 
-- **Schema, Models & Migrations**:
-  - **Model**: `URLModel` struct defined with GORM tags:
-    - `Code`: Primary Key (`type:varchar(10)`).
-    - `LongURL`: Unique Index (`type:text`, `not null`).
-    - `CreatedAt`: Timestamp (`not null`).
-  - **Migrations**: Handled automatically on application startup via `db.AutoMigrate(&URLModel{})`.
+### Connection Timeouts & Slow-Client Mitigation
+To harden the HTTP server against connection exhaustion and Slowloris attacks, explicit timeout parameters are configured:
+* `ReadHeaderTimeout` (`2s`): Mitigates Slowloris attacks by requiring request headers to be read promptly.
+* `ReadTimeout` (`5s`): Caps the total time allowed for reading the entire request body.
+* `WriteTimeout` (`10s`): Ensures connections stuck on slow network clients are cleaned up gracefully.
+* `IdleTimeout` (`120s`): Manages keep-alive connection efficiency while freeing idle file descriptors.
 
-- **Crash Safety & Atomicity**:
-  - Insert operations directly issue `db.Create()`, taking advantage of PostgreSQL's ACID transaction boundaries.
-  - Links are fully committed to durable storage **prior to returning the HTTP 201 Created response**, guaranteeing no link loss upon sudden server crashes.
+### Memory Policy & Eviction Decisions
+No in-memory eviction cap or LRU policy was introduced in this phase. For single-binary workloads, direct map synchronization delivers optimal performance. Memory eviction boundaries and TTL mechanisms are intentionally deferred to persistent storage or external caching layers (such as Redis).
 
-- **How `created_at` is Stored**:
-  - Stored as standard `time.Time` mapped to PostgreSQL's `TIMESTAMPTZ` / `TIMESTAMP` types in UTC.
-  - Serializes transparently to RFC3339 standard JSON strings during API responses.
+## Phase 4: Durable Persistence with PostgreSQL & GORM
 
-- **Idempotency + Persistence**:
-  - Idempotency is preserved across server restarts by querying the unique index on `long_url` before generating new short codes.
-  - Submitting an identical normalized long URL after a database or server restart retrieves the original short code record from PostgreSQL, maintaining 100% consistency with Part 1 domain rules.
+Phase 4 moves the storage foundation from volatile RAM to a durable, transactional relational database.
 
+### Storage Engine Selection
+The service uses GORM paired with PostgreSQL (`gorm.io/driver/postgres`). PostgreSQL supplies reliable transactional guarantees, high performance, and crash safety for production traffic, while GORM provides clean object-relational mapping alongside native PostgreSQL indexing capabilities.
 
+### Data Model, Schema, & Auto-Migrations
+The database structure relies on the `URLModel` struct configured with GORM struct tags:
+* `Code`: Primary Key (`type:varchar(10)`).
+* `LongURL`: Unique Index (`type:text`, `not null`).
+* `CreatedAt`: Timestamp (`not null`).
 
+Schema migrations run automatically at application startup using `db.AutoMigrate(&URLModel{})`.
 
-## Phase 5 — Millions of Requests (Scale-out Architecture & Redis Cache)
+### Atomicity & Crash Safety
+Database inserts execute directly through `db.Create()`, leveraging PostgreSQL's native ACID transaction boundaries. Links are committed to durable disk storage prior to returning the `HTTP 201 Created` response, guaranteeing zero data loss during unexpected server crashes.
 
-## Dependencies
-*   **github.com/redis/go-redis/v9**: Official Go client library for Redis.
-    *   Manages TCP connection pooling, thread-safe Redis command execution, automatic reconnections, context timeouts, and TTL key expirations for the caching layer.
-    *   **Rationale**: The Go standard library (`net/http`, `os`) does not provide a native client for the Redis Serialization Protocol (RESP). Using `go-redis` ensures production-ready connection management and efficient caching operations.
+### Timestamp Handling
+`CreatedAt` is stored as a standard `time.Time` value mapped to PostgreSQL `TIMESTAMPTZ` / `TIMESTAMP` types in UTC. During API serialization, it formats transparently into RFC3339 JSON strings.
 
----
+### Persistence & Idempotency Rules
+Idempotency persists across application restarts by checking the unique index on `long_url` prior to generating new short codes. Re-submitting an existing normalized long URL after a database or application reboot retrieves the original short code record from PostgreSQL, maintaining total consistency with Phase 1 domain rules.
 
-*   **Architecture Overview (Stateless Replicas & Shared Persistence)**:
-    *   **Stateless Application Nodes**: The Go web application (`cmd/server`) holds no in-memory state required for request correctness when using persistent storage. Multiple application replicas (\\(N\\) instances) run concurrently behind a Layer 7 Load Balancer (e.g., NGINX / HAProxy / AWS ALB) using Round-Robin routing.
-    *   **Shared Storage & Distributed Cache Layer**: All application replicas connect to a centralized PostgreSQL database cluster (primary for writes, read-replicas for scaling queries) and a shared Redis cluster for distributed caching.
+## Phase 5: High-Scale Architecture & Distributed Caching
 
-*   **Redis Cache Layer Implementation (Bonus Code Architecture)**:
-    *   **Decorator Pattern Choice**: Implemented `RedisStore` struct which wraps any underlying implementation of the domain `Store` interface (`PostgresStore` or `URLStore`). This keeps HTTP handlers completely decoupled from caching mechanisms while dynamically adding caching capabilities.
-    *   **Key Schemas & Data Mapping**:
-        *   `url:{normalized_url}` \\(\rightarrow\\) `code`: Maps normalized long URLs to generated short codes to serve idempotency lookups on `Shorten()` directly from memory.
-        *   `meta:{code}` \\(\rightarrow\\) JSON-serialized `MetaData`: Stores link metadata (`url` and `created_at`) to instantly fulfill both `GET /api/v1/links/{code}` queries and `GET /{code}` HTTP 302 redirects.
-    *   **Read Path (Cache Hit vs. Cache Miss)**:
-        1.  **Cache Hit**: Incoming redirect/metadata requests check Redis `meta:{code}`. On a hit, data is deserialized and returned in \\(O(1)\\) time (<2ms) without hitting PostgreSQL.
-        2.  **Cache Miss**: On a miss, `RedisStore` delegates to `underlying.GetMetadatafromCode(code)` (PostgreSQL), serializes the result, populates Redis asynchronously with configured TTL (`-redis-ttl`), and returns the record.
-    *   **Write Path & Idempotency Caching**:
-        *   When `Shorten()` is invoked, Redis key `url:{normalized_url}` is queried first. If cached, the existing short code is returned immediately, maintaining 100% idempotency.
-        *   If not cached, the write is executed on the primary database via `underlying.Shorten()`, and the resulting mappings (`url:` and `meta:`) are populated into Redis with TTL.
-    *   **Cache Invalidation & TTL Policy**:
-        *   Configurable CLI flag `-redis-ttl` (default: `24h`) controls key expiration.
-        *   **Tradeoff Analysis**: Since shortened links and metadata are immutable in this application domain (a created short code never changes its target URL), complex cache invalidation is unnecessary. Keys expire gracefully via Redis memory eviction policies (`allkeys-lru`) when RAM limits are reached.
+To handle millions of requests, Phase 5 introduces a stateless scale-out architecture backed by Redis caching and edge CDN capabilities.
 
-*   **CDN / Edge Caching Strategy for Redirects**:
-    *   **Strategy**: Placing an Edge CDN (e.g., Cloudflare or CloudFront) in front of the Load Balancer to cache `GET /{code}` HTTP 302 responses.
-    *   **HTTP Response Headers**: The origin server sets `Cache-Control: public, max-age=86400` on redirect responses.
-    *   **Tradeoffs**:
-        *   *Pros*: Offloads over 95% of read/redirect traffic away from application nodes directly to edge locations worldwide, yielding ultra-low response latencies (<15ms).
-        *   *Cons & Stale Redirects*: If link deletion or click analytics tracking were required, edge caching would cause stale redirects until TTL expiration or manual cache purge. Given link immutability, `302 Found` edge caching offers an optimal cost-to-performance ratio.
+### Dependencies
+* `github.com/redis/go-redis/v9`: The official Go client for Redis. It manages TCP connection pooling, thread-safe command execution, auto-reconnections, context timeouts, and TTL key expirations. Because Go's standard library (`net/http`, `os`) lacks native support for the Redis Serialization Protocol (RESP), `go-redis` is required for production connection management.
 
-*   **Write-Path Scaling Strategy**:
-    *   **Pre-Generated Code Pool**: To eliminate DB lock contention and random code generation collision retries during high-throughput POST bursts, background worker goroutines pre-generate unique 6-character codes into a Redis Set/Queue. The `Shorten()` method pops a guaranteed unique code in \\(O(1)\\) time.
-    *   **Rate Limiting**: Protects `POST /api/shorten` from abuse via a Redis-backed Sliding Window Middleware per client IP/API token.
+### Stateless Scale-Out Architecture
+* **Stateless Application Nodes**: The Go web server (`cmd/server`) holds no local state required for request correctness. Multiple application replicas (\\(N\\) instances) run concurrently behind a Layer 7 Load Balancer (such as NGINX, HAProxy, or AWS ALB) using Round-Robin routing.
+* **Shared Storage & Cache**: All replicas connect to a centralized PostgreSQL database cluster (primary for writes, read-replicas for scaling read queries) and a shared distributed Redis cluster.
 
-*   **Sharding & Database Partitioning Strategy**:
-    *   **Read/Redirect Partitioning**: When a single PostgreSQL or Redis node reaches memory/disk limits, keys are sharded across database nodes using consistent hashing on the short `code`.
-    *   **Redis Cluster Sharding**: Uses Redis Cluster hash slots (\\(16,384\\) slots based on `CRC16(code)`). Related keys use hash tags (e.g., `{code}:meta`) to guarantee placement on the same cluster node for pipeline efficiency.
-    *   **Global Idempotency Index**: Long URL lookup for idempotency across shards is routed via a distributed hash table or dedicated secondary index mapping `Hash(long_url) -> Shard_ID`.
+### Redis Caching with the Decorator Pattern
+The caching layer is implemented via `RedisStore`, which wraps any underlying `Store` implementation (`PostgresStore` or `URLStore`) using the Decorator Pattern. This keeps HTTP handlers decoupled from caching mechanics while dynamically adding caching capabilities.
 
+#### Key Schemas
+* `url:{normalized_url}` \\(\rightarrow\\) `code`: Maps normalized long URLs to generated codes to serve idempotency checks on `Shorten()` directly from RAM.
+* `meta:{code}` \\(\rightarrow\\) JSON-serialized `MetaData`: Holds link metadata (`url` and `created_at`) to instantly satisfy both `GET /api/v1/links/{code}` requests and `GET /{code}` HTTP 302 redirects.
 
-    ---
-    ## Phase 6 — Production Habits
+#### Read Path Flow
+1. **Cache Hit**: Incoming redirect or metadata queries check Redis `meta:{code}`. On a hit, data is deserialized and returned in \\(O(1)\\) time (<2ms) without querying PostgreSQL.
+2. **Cache Miss**: On a miss, `RedisStore` delegates execution to `underlying.GetMetadatafromCode(code)` in PostgreSQL, serializes the result, asynchronously populates Redis with the configured TTL (`-redis-ttl`), and returns the record.
 
-## Dependencies
-- `golang.org/x/time/rate`: Used to implement the Token Bucket rate-limiting algorithm efficiently for the POST `/api/shorten` endpoint to prevent spam and abuse.
+#### Write Path & Idempotency Flow
+When `Shorten()` is called, `url:{normalized_url}` is queried in Redis first. If cached, the existing short code is returned immediately. If uncached, the write executes against the primary database via `underlying.Shorten()`, and the resulting mappings (`url:` and `meta:`) are written to Redis with TTL.
 
-- **Graceful Shutdown**:
-  - Implemented using `signal.Notify` to trap `SIGINT` and `SIGTERM`.
-  - Upon receiving the signal, `srv.Shutdown(ctx)` is called with a **10-second timeout context**. 
-  - **Drain Strategy:** The server stops accepting new connections immediately but allows currently in-flight requests (such as DB writes or Redis caching) up to 10 seconds to finish successfully before terminating the process.
+#### Cache Invalidation & TTL Policy
+Key expiration is controlled via the configurable CLI flag `-redis-ttl` (defaulting to `24h`). Because shortened links and metadata are immutable in this system (a short code never changes target destination), complex cache invalidation is unnecessary. Keys expire naturally or are evicted under memory pressure via Redis `allkeys-lru` policies.
 
-- **Rate Limiting**:
-  - A per-IP Token Bucket rate limiter was implemented exclusively for the write path (`POST /api/shorten`).
-  - **Parameters:** Each client IP is limited to 5 requests per second with a burst capacity (bucket size) of 10. Exceeding this limit returns HTTP 429 Too Many Requests.
+### Edge CDN Strategy for Redirects
+To scale redirects, an Edge CDN (such as Cloudflare or CloudFront) sits in front of the Load Balancer to cache `GET /{code}` HTTP 302 responses. The origin server sets `Cache-Control: public, max-age=86400` on redirect responses.
+* **Advantages**: Offloads over 95% of redirect traffic away from application nodes directly to edge locations globally, achieving response latencies under 15ms.
+* **Trade-offs**: If link deletion or real-time click analytics were required, edge caching could cause stale redirects until TTL expiration. Given link immutability, HTTP 302 edge caching offers an ideal performance-to-cost ratio.
 
-- **Domain Policy (Blocklist)**:
-  - Added a strict blocklist check before URL generation.
-  - **Rules:** The domains `phishing.com`, `malware.org`, `localhost`, and `127.0.0.1` are permanently blocked. Blocking localhost/127.0.0.1 provides a fundamental layer of protection against internal SSRF (Server-Side Request Forgery) attacks. Blocked URLs return HTTP 403 Forbidden.
+### Write-Path Scaling & Rate Limiting
+* **Pre-Generated Code Pool**: To eliminate database lock contention and collision retries during high-volume POST spikes, background worker goroutines pre-generate unique 6-character codes into a Redis Set/Queue. The `Shorten()` method pops a guaranteed unique code in \\(O(1)\\) time.
+* **Rate Limiting**: Protects `POST /api/shorten` against abuse using a Redis-backed Sliding Window Middleware keyed per client IP or API token.
 
-- **Observability & Safe Logging (Bonus Claim)**:
-  - **Structured Logging:** Adopted Go 1.21's `log/slog` to output structured JSON logs to `stdout`, replacing the standard text logger for better machine readability in production environments.
-  - **What is logged:** HTTP Method, sanitized Path, Status Code, IP address, and Request Duration.
-  - **What is NEVER logged:** Full URLs and raw query strings (`?token=secret`). The `LoggingMiddleware` explicitly clears `r.URL.RawQuery` before logging the request to guarantee that secrets, API tokens, or user session parameters passed via URL are never persisted in server logs.
-  - **pprof Profiling:** The standard `net/http/pprof` endpoints are conditionally registered behind a `-pprof` CLI flag, allowing operators to profile CPU and memory on demand without exposing debug endpoints by default.
+### Database Sharding & Partitioning
+* **Consistent Hashing**: When a single PostgreSQL or Redis node reaches resource boundaries, keys are partitioned across database nodes using consistent hashing on the short code.
+* **Redis Cluster Sharding**: Utilizes Redis Cluster hash slots (\\(16,384\\) slots derived from `CRC16(code)`). Hash tags (such as `{code}:meta`) ensure related keys reside on the same cluster node for pipeline efficiency.
+* **Global Idempotency Index**: Cross-shard long URL lookups for idempotency route through a distributed hash table or dedicated secondary index mapping `Hash(long_url) -> Shard_ID`.
+
+## Phase 6: Production Habits & Operational Safety
+
+Phase 6 incorporates production-grade operational practices around shutdown handling, traffic safety, and observability.
+
+### Dependencies
+* `golang.org/x/time/rate`: Used to implement an efficient Token Bucket rate-limiting algorithm for the `POST /api/shorten` endpoint.
+
+### Graceful Shutdown
+Graceful shutdown is managed using `signal.Notify` to capture `SIGINT` and `SIGTERM` signals. Upon receiving a signal, `srv.Shutdown(ctx)` is invoked with a 10-second timeout context.
+* **Drain Strategy**: The server halts acceptance of new incoming connections immediately while granting in-flight requests (such as database writes or Redis cache operations) up to 10 seconds to complete cleanly before process exit.
+
+### Rate Limiting Controls
+A per-IP Token Bucket rate limiter is applied specifically to the write path (`POST /api/shorten`). Each client IP is restricted to 5 requests per second with a burst capacity (bucket size) of 10. Exceeding this quota triggers an `HTTP 429 Too Many Requests` response.
+
+### Domain Blocklist Policy
+A domain verification check executes prior to code generation. Domains including `phishing.com`, `malware.org`, `localhost`, and `127.0.0.1` are permanently blocked. Blocking `localhost` and `127.0.0.1` provides protection against internal Server-Side Request Forgery (SSRF) vectors. Blocked attempts yield an `HTTP 403 Forbidden` status.
+
+### Observability, Safe Logging, & Profiling
+* **Structured Logging**: Uses Go 1.21's `log/slog` library to output structured JSON logs to `stdout`, replacing text logging for better log ingestion in production.
+* **Logged Fields**: HTTP Method, sanitized Path, Status Code, IP address, and Request Duration.
+* **Sensitive Data Protection**: Full URLs and raw query strings (such as `?token=secret`) are strictly omitted. `LoggingMiddleware` explicitly clears `r.URL.RawQuery` prior to logging to ensure tokens, secrets, or session parameters are never stored in server logs.
+* **`pprof` Profiling**: Standard `net/http/pprof` diagnostic endpoints are registered conditionally behind a `-pprof` CLI flag, enabling on-demand CPU and memory profiling without exposing debug endpoints by default.
