@@ -1,6 +1,103 @@
-## Performance & Benchmarks (Phase 3)
+# How this Project Works ?
 
-### 1. Benchmark Results
+## Requirements
+
+Before running the application, ensure your environment meets the following prerequisites:
+
+* **Go Version:** Go 1.26.0 or higher.
+* **Databases (Depending on execution mode):**
+if you are using postgres flag make sure you have Databases Called **urlshortener** and **urlshortener_test** in your PC
+* **PostgreSQL:** Required if running with the `-store=postgres` flag.
+* **Redis:** Required if utilizing the caching layer (`-redis-addr` flag).
+
+
+* **Core Go Modules:** All dependencies will be downloaded automatically via `go mod tidy`. Primary external modules include:
+* `gorm.io/gorm` & `gorm.io/driver/postgres`: For database ORM and persistence.
+* `[github.com/redis/go-redis/v9](https://github.com/redis/go-redis/v9)`: For the distributed caching layer.
+* `golang.org/x/time`: For the Token Bucket rate-limiting middleware.
+
+
+
+Download the required packages before running the application:
+
+```bash
+go mod tidy
+
+```
+
+---
+
+## How to Run
+
+The application is highly configurable via Command Line Interface (CLI) flags. You can run it in a lightweight in-memory mode for development, or spin it up with full database and caching layers for production.
+
+### Configuration Flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-addr` | `:8080` | The host and port where the HTTP server will listen. |
+| `-base` | `http://localhost:8080` | The base URL used to construct the shortened links returned in the JSON response. |
+| `-store` | `memory` | Defines the primary storage engine. Accepted values are `memory` (for volatile RAM storage) or `postgres` (for durable persistence). |
+| `-dsn` | *(Local Postgres Default)* | The PostgreSQL Data Source Name (connection string). Only used if `-store=postgres` is set. |
+| `-redis-addr` | `""` (Empty) | The Redis server address (e.g., `localhost:6379`). **Providing this flag automatically enables the Redis caching layer.** |
+| `-redis-pass` | `""` (Empty) | The password for the Redis server, if authentication is required. |
+| `-redis-ttl` | `24h0m0s` | The Time-To-Live (TTL) duration for keys stored in the Redis cache. |
+| `-pprof` | `false` | A boolean flag. If provided, exposes the standard `net/http/pprof` endpoints at `/debug/pprof/` for CPU and memory profiling. |
+
+### Execution Examples
+### redis related flags and pprof flag are only available at feat/AdvancedParts Branch
+
+**1. Development Mode (In-Memory)**
+The simplest way to run the application. Data is stored in RAM and will be lost upon restarting.
+
+```bash
+go run ./cmd/server/main.go
+
+```
+
+**2. Standard Persistence Mode (PostgreSQL only)**
+Runs the application with durable storage. Ensure your PostgreSQL server is running and the DSN matches your credentials.
+
+```bash
+go run ./cmd/server/main.go -store=postgres -dsn="host=localhost user=postgres password=postgres dbname=urlshortener port=5432 sslmode=disable"
+
+```
+
+**3. Production Mode (PostgreSQL + Redis Cache + Custom Port)**
+Runs the application fully scaled. It uses PostgreSQL for durable writes, Redis for ultra-fast reads (caching metadata and redirects), and changes the listen port to 9090.
+
+```bash
+go run ./cmd/server/main.go -store=postgres -redis-addr=localhost:6379 -addr=:9090 -base=http://localhost:9090
+
+```
+
+**4. Debugging & Profiling Mode**
+Enables the `pprof` endpoints for live performance monitoring while running the memory store.
+
+```bash
+go run ./cmd/server/main.go -pprof=true
+
+```
+---
+# Test Coverages : 
+
+## Phase 1 to 4 :
+* **without main Coverage(main Excluded and just the internal packages included) :** 
+
+![test Results](./screenshots/phase1-4_without_main.png)
+
+
+
+* **with main Coverage(main included) :** 
+
+![test Results](./screenshots/phase1-4_with_main.png)
+
+
+
+
+# Performance & Benchmarks (Phase 3)
+
+## 1. Benchmark Results
 
 Execution output for `go test -bench=. -benchmem ./...`:
 
@@ -13,7 +110,7 @@ Execution output for `go test -bench=. -benchmem ./...`:
  `go test -bench=. -cpuprofile=cpu.pprof ./internal/shortener`
  `go test -bench=. -memprofile=mem.pprof ./internal/shortener`
 
-#### Profiling Insights
+### Profiling Insights
 Analysis of CPU and Memory execution profiles using `pprof` revealed the following key insights from the benchmark runs:
 
 - **CPU Profile (`cpu.pprof`):**
@@ -25,7 +122,7 @@ Analysis of CPU and Memory execution profiles using `pprof` revealed the followi
   - **HTTP Header Overhead:** Header cloning and MIME header manipulations (`net/http.Header.Clone` at 5.89% and `MIMEHeader.Set` at 5.38%) represent major allocation sources during request processing.
   - **Handler Memory Breakdown:** Among application handlers, `(*Handler).Shorten` accounts for 8.26% (0.68 GB) cumulative allocations, `(*Handler).Redirect` accounts for 6.13% (0.50 GB), and `(*Handler).GetMetaData` accounts for 4.90% (0.40 GB). URL normalization (`net/url.parse`) accounts for 3.62% (0.30 GB) of total memory allocations.
 
-#### `pprof` Flame Graph
+### `pprof` Flame Graph
 visual graph generated via `go tool pprof -http=:8080 cpu.pprof`:
 
 ![pprof Flame Graph](./screenshots/cpu_pprof_phase3.png)
@@ -36,7 +133,7 @@ visual graph generated via `go tool pprof -http=:8080 mem.pprof`:
 ![pprof Flame Graph](./screenshots/mem_pprof_phase3.png)
 
 
-#### Terminal Output
+### Terminal Output
 Output for `go tool pprof -top cpu.pprof`:
 
 ```text
@@ -306,3 +403,4 @@ Dropped 54 nodes (cum <= 0.04GB)
          0     0% 97.87%     0.07GB  0.81%  urlshortener/internal/shortener.NormalizeURL
          
 ```
+
